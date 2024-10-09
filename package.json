@@ -1,6 +1,6 @@
 {
   "name": "@solimanware/capacitor-message-reader",
-  "version": "6.0.0",
+  "version": "6.0.1",
   "description": "A capacitor plugin to read SMS and MMS inbox",
   "main": "dist/plugin.cjs.js",
   "module": "dist/esm/index.js",
@@ -66,5 +66,8 @@
     "android": {
       "src": "android"
     }
+  },
+  "publishConfig": {
+    "access": "public"
   }
 }

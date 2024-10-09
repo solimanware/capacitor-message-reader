@@ -14,19 +14,17 @@ import java.io.InputStream;
 import java.io.InputStreamReader;
 import java.util.List;
 import java.util.ArrayList;
-import java.util.Collections;
-import java.util.concurrent.ExecutorService;
-import java.util.concurrent.Executors;
-import java.util.concurrent.Future;
+import java.util.Set;
+import java.util.HashSet;
+import java.util.Map;
+import java.util.HashMap;
 
 public class MessageReader {
 
     private Context context;
-    private ExecutorService executorService;
 
     public MessageReader(Context context) {
         this.context = context;
-        this.executorService = Executors.newCachedThreadPool(); // Use cached thread pool for better resource management
     }
 
     public JSONArray getMessages(GetMessageFilterInput filter) {
@@ -35,29 +33,19 @@ public class MessageReader {
         // If filter is null, create an empty filter
         final GetMessageFilterInput finalFilter = (filter == null) ? new GetMessageFilterInput() : filter;
 
-        Future<JSONArray> smsFuture = executorService.submit(() -> readSMS(finalFilter));
-        Future<JSONArray> mmsFuture = executorService.submit(() -> readMMS(finalFilter));
+        JSONArray smsMessages = readSMS(finalFilter);
+        JSONArray mmsMessages = readMMS(finalFilter);
 
-        try {
-            JSONArray smsMessages = smsFuture.get();
-            JSONArray mmsMessages = mmsFuture.get();
-
-            // Combine SMS and MMS messages
-            for (int i = 0; i < smsMessages.length(); i++) {
-                messages.put(smsMessages.getJSONObject(i));
-            }
-            for (int i = 0; i < mmsMessages.length(); i++) {
-                messages.put(mmsMessages.getJSONObject(i));
-            }
-
-            // No need to sort if messages are fetched in order
-            // Apply indexFrom, indexTo, and limit filters
-            return applyPaginationFilters(messages, finalFilter);
-        } catch (Exception e) {
-            e.printStackTrace();
+        // Combine SMS and MMS messages
+        for (int i = 0; i < smsMessages.length(); i++) {
+            messages.put(smsMessages.optJSONObject(i));
+        }
+        for (int i = 0; i < mmsMessages.length(); i++) {
+            messages.put(mmsMessages.optJSONObject(i));
         }
 
-        return new JSONArray(); // Return an empty array if there's an exception
+        // Apply pagination filters
+        return applyPaginationFilters(messages, finalFilter);
     }
 
     private JSONArray applyPaginationFilters(JSONArray messages, GetMessageFilterInput filter) {
@@ -81,40 +69,39 @@ public class MessageReader {
 
     private JSONArray readSMS(GetMessageFilterInput filter) {
         JSONArray messages = new JSONArray();
-        Uri smsUri = Telephony.Sms.CONTENT_URI;
+
+        Uri smsUri = Telephony.Sms.CONTENT_URI.buildUpon()
+                .appendQueryParameter("limit", String.valueOf(filter.getLimit() != null ? filter.getLimit() : 100))
+                .appendQueryParameter("offset", String.valueOf(filter.getIndexFrom() != null ? filter.getIndexFrom() : 0))
+                .build();
+
         ContentResolver cr = context.getContentResolver();
 
-        List<String> projectionList = new ArrayList<>();
-        projectionList.add(Telephony.Sms._ID);
-        projectionList.add(Telephony.Sms.ADDRESS);
-        projectionList.add(Telephony.Sms.BODY);
-        projectionList.add(Telephony.Sms.DATE);
-
-        String[] projection = projectionList.toArray(new String[0]);
+        String[] projection = {
+                Telephony.Sms._ID,
+                Telephony.Sms.ADDRESS,
+                Telephony.Sms.BODY,
+                Telephony.Sms.DATE
+        };
 
         String selection = buildSmsSelection(filter);
         String[] selectionArgs = buildSmsSelectionArgs(filter);
 
         String sortOrder = Telephony.Sms.DATE + " DESC";
-        if (filter.getLimit() != null) {
-            sortOrder += " LIMIT " + filter.getLimit();
-            if (filter.getIndexFrom() != null) {
-                sortOrder += " OFFSET " + filter.getIndexFrom();
-            }
-        }
 
         try (Cursor cursor = cr.query(smsUri, projection, selection, selectionArgs, sortOrder)) {
             if (cursor != null) {
+                int idIndex = cursor.getColumnIndex(Telephony.Sms._ID);
+                int addressIndex = cursor.getColumnIndex(Telephony.Sms.ADDRESS);
+                int bodyIndex = cursor.getColumnIndex(Telephony.Sms.BODY);
+                int dateIndex = cursor.getColumnIndex(Telephony.Sms.DATE);
+
                 while (cursor.moveToNext()) {
                     JSONObject sms = new JSONObject();
-                    String id = cursor.getString(cursor.getColumnIndex(Telephony.Sms._ID));
-                    String body = cursor.getString(cursor.getColumnIndex(Telephony.Sms.BODY));
-                    long date = cursor.getLong(cursor.getColumnIndex(Telephony.Sms.DATE));
-
-                    sms.put("id", id);
-                    sms.put("sender", cursor.getString(cursor.getColumnIndex(Telephony.Sms.ADDRESS)));
-                    sms.put("body", body);
-                    sms.put("date", date);
+                    sms.put("id", cursor.getString(idIndex));
+                    sms.put("sender", cursor.getString(addressIndex));
+                    sms.put("body", cursor.getString(bodyIndex));
+                    sms.put("date", cursor.getLong(dateIndex));
                     sms.put("messageType", "sms");
                     messages.put(sms);
                 }
@@ -128,7 +115,12 @@ public class MessageReader {
 
     private JSONArray readMMS(GetMessageFilterInput filter) {
         JSONArray messages = new JSONArray();
-        Uri mmsUri = Uri.parse("content://mms");
+
+        Uri mmsUri = Uri.parse("content://mms").buildUpon()
+                .appendQueryParameter("limit", String.valueOf(filter.getLimit() != null ? filter.getLimit() : 100))
+                .appendQueryParameter("offset", String.valueOf(filter.getIndexFrom() != null ? filter.getIndexFrom() : 0))
+                .build();
+
         ContentResolver cr = context.getContentResolver();
 
         String[] projection = {
@@ -140,21 +132,42 @@ public class MessageReader {
         String[] selectionArgs = buildMmsSelectionArgs(filter);
 
         String sortOrder = "date DESC";
-        if (filter.getLimit() != null) {
-            sortOrder += " LIMIT " + filter.getLimit();
-            if (filter.getIndexFrom() != null) {
-                sortOrder += " OFFSET " + filter.getIndexFrom();
-            }
-        }
+
+        Set<String> mmsIds = new HashSet<>();
 
         try (Cursor cursor = cr.query(mmsUri, projection, selection, selectionArgs, sortOrder)) {
             if (cursor != null) {
-                while (cursor.moveToNext()) {
-                    String id = cursor.getString(cursor.getColumnIndex("_id"));
-                    long date = cursor.getLong(cursor.getColumnIndex("date")) * 1000L; // Convert to milliseconds
+                int idIndex = cursor.getColumnIndex("_id");
 
-                    String mmsBody = getMmsText(id);
-                    JSONArray senders = getMmsAddresses(id);
+                while (cursor.moveToNext()) {
+                    String id = cursor.getString(idIndex);
+                    mmsIds.add(id);
+                }
+            }
+        } catch (Exception e) {
+            e.printStackTrace();
+        }
+
+        if (mmsIds.isEmpty()) {
+            return messages;
+        }
+
+        // Fetch all MMS addresses and texts in bulk
+        Map<String, JSONArray> addressesMap = getAllMmsAddresses(mmsIds);
+        Map<String, String> textsMap = getAllMmsTexts(mmsIds);
+
+        // Re-query MMS messages to get dates
+        try (Cursor cursor = cr.query(mmsUri, projection, selection, selectionArgs, sortOrder)) {
+            if (cursor != null) {
+                int idIndex = cursor.getColumnIndex("_id");
+                int dateIndex = cursor.getColumnIndex("date");
+
+                while (cursor.moveToNext()) {
+                    String id = cursor.getString(idIndex);
+                    long date = cursor.getLong(dateIndex) * 1000L; // Convert to milliseconds
+
+                    String mmsBody = textsMap.get(id);
+                    JSONArray senders = addressesMap.get(id);
 
                     // Apply sender and body filters manually
                     boolean matchesSenderFilter = matchesSenderFilter(filter, senders);
@@ -165,13 +178,13 @@ public class MessageReader {
                         mms.put("id", id);
                         mms.put("date", date);
 
-                        if (senders.length() > 0) {
+                        if (senders != null && senders.length() > 0) {
                             mms.put("sender", senders.getJSONObject(0).getString("sender"));
                         } else {
                             mms.put("sender", "");
                         }
 
-                        mms.put("body", mmsBody.isEmpty() ? "[No text content]" : mmsBody);
+                        mms.put("body", mmsBody != null && !mmsBody.isEmpty() ? mmsBody : "[No text content]");
                         mms.put("messageType", "mms");
                         messages.put(mms);
                     }
@@ -188,15 +201,17 @@ public class MessageReader {
         if (filter.getSender() == null || filter.getSender().isEmpty()) {
             return true;
         }
-        for (int i = 0; i < senders.length(); i++) {
-            try {
-                JSONObject senderObj = senders.getJSONObject(i);
-                String sender = senderObj.getString("sender");
-                if (sender.equals(filter.getSender())) {
-                    return true;
+        if (senders != null) {
+            for (int i = 0; i < senders.length(); i++) {
+                try {
+                    JSONObject senderObj = senders.getJSONObject(i);
+                    String sender = senderObj.getString("sender");
+                    if (sender.equals(filter.getSender())) {
+                        return true;
+                    }
+                } catch (Exception e) {
+                    e.printStackTrace();
                 }
-            } catch (Exception e) {
-                e.printStackTrace();
             }
         }
         return false;
@@ -213,7 +228,7 @@ public class MessageReader {
         StringBuilder selection = new StringBuilder();
         List<String> clauses = new ArrayList<>();
 
-        if (!filter.getIds().isEmpty()) {
+        if (filter.getIds() != null && !filter.getIds().isEmpty()) {
             clauses.add(Telephony.Sms._ID + " IN (" + makePlaceholders(filter.getIds().size()) + ")");
         }
 
@@ -243,7 +258,9 @@ public class MessageReader {
     private String[] buildSmsSelectionArgs(GetMessageFilterInput filter) {
         List<String> args = new ArrayList<>();
 
-        args.addAll(filter.getIds());
+        if (filter.getIds() != null && !filter.getIds().isEmpty()) {
+            args.addAll(filter.getIds());
+        }
 
         if (filter.getMinDate() != null) {
             args.add(String.valueOf(filter.getMinDate()));
@@ -269,7 +286,7 @@ public class MessageReader {
 
         List<String> clauses = new ArrayList<>();
 
-        if (!filter.getIds().isEmpty()) {
+        if (filter.getIds() != null && !filter.getIds().isEmpty()) {
             clauses.add("_id IN (" + makePlaceholders(filter.getIds().size()) + ")");
         }
 
@@ -291,7 +308,9 @@ public class MessageReader {
     private String[] buildMmsSelectionArgs(GetMessageFilterInput filter) {
         List<String> args = new ArrayList<>();
 
-        args.addAll(filter.getIds());
+        if (filter.getIds() != null && !filter.getIds().isEmpty()) {
+            args.addAll(filter.getIds());
+        }
 
         if (filter.getMinDate() != null) {
             args.add(String.valueOf(filter.getMinDate() / 1000L)); // Convert milliseconds to seconds
@@ -317,55 +336,97 @@ public class MessageReader {
         }
     }
 
-    private JSONArray getMmsAddresses(String id) {
-        JSONArray senders = new JSONArray();
-        Uri addrUri = Uri.parse("content://mms/" + id + "/addr");
-        String[] projection = {"address", "type"};
-        try (Cursor cursor = context.getContentResolver().query(addrUri, projection, null, null, null)) {
+    private Map<String, JSONArray> getAllMmsAddresses(Set<String> ids) {
+        Map<String, JSONArray> addressesMap = new HashMap<>();
+
+        Uri addrUri = Uri.parse("content://mms/addr");
+
+        String[] projection = {"msg_id", "address", "type"};
+
+        String selection = "msg_id IN (" + makePlaceholders(ids.size()) + ")";
+
+        String[] selectionArgs = ids.toArray(new String[0]);
+
+        try (Cursor cursor = context.getContentResolver().query(addrUri, projection, selection, selectionArgs, null)) {
             if (cursor != null) {
+                int msgIdIndex = cursor.getColumnIndex("msg_id");
+                int addressIndex = cursor.getColumnIndex("address");
+                int typeIndex = cursor.getColumnIndex("type");
+
                 while (cursor.moveToNext()) {
-                    String sender = cursor.getString(cursor.getColumnIndex("address"));
-                    // Skip senders like "insert-address-token" which are placeholders
-                    if (sender != null && !sender.equalsIgnoreCase("insert-address-token")) {
+                    String msgId = cursor.getString(msgIdIndex);
+                    String address = cursor.getString(addressIndex);
+
+                    // Skip placeholders
+                    if (address != null && !address.equalsIgnoreCase("insert-address-token")) {
                         JSONObject addr = new JSONObject();
-                        addr.put("sender", sender);
-                        addr.put("type", cursor.getInt(cursor.getColumnIndex("type")));
-                        senders.put(addr);
+                        addr.put("sender", address);
+                        addr.put("type", cursor.getInt(typeIndex));
+
+                        JSONArray addresses = addressesMap.get(msgId);
+                        if (addresses == null) {
+                            addresses = new JSONArray();
+                            addressesMap.put(msgId, addresses);
+                        }
+                        addresses.put(addr);
                     }
                 }
             }
         } catch (Exception e) {
             e.printStackTrace();
         }
-        return senders;
+
+        return addressesMap;
     }
 
-    private String getMmsText(String id) {
-        StringBuilder body = new StringBuilder();
+    private Map<String, String> getAllMmsTexts(Set<String> ids) {
+        Map<String, String> textsMap = new HashMap<>();
+
         Uri partUri = Uri.parse("content://mms/part");
-        String selection = "mid=?";
-        String[] selectionArgs = {id};
-        try (Cursor cursor = context.getContentResolver().query(partUri, null, selection, selectionArgs, null)) {
+
+        String[] projection = {"mid", "_id", "ct", "_data", "text"};
+
+        String selection = "mid IN (" + makePlaceholders(ids.size()) + ")";
+
+        String[] selectionArgs = ids.toArray(new String[0]);
+
+        try (Cursor cursor = context.getContentResolver().query(partUri, projection, selection, selectionArgs, null)) {
             if (cursor != null) {
+                int midIndex = cursor.getColumnIndex("mid");
+                int idIndex = cursor.getColumnIndex("_id");
+                int ctIndex = cursor.getColumnIndex("ct");
+                int dataIndex = cursor.getColumnIndex("_data");
+                int textIndex = cursor.getColumnIndex("text");
+
                 while (cursor.moveToNext()) {
-                    String partId = cursor.getString(cursor.getColumnIndex("_id"));
-                    String type = cursor.getString(cursor.getColumnIndex("ct"));
+                    String mid = cursor.getString(midIndex);
+                    String partId = cursor.getString(idIndex);
+                    String type = cursor.getString(ctIndex);
+
+                    String data = cursor.getString(dataIndex);
+                    String text = "";
+
                     if ("text/plain".equals(type) || "application/smil".equals(type)) {
-                        String data = cursor.getString(cursor.getColumnIndex("_data"));
-                        String text;
                         if (data != null) {
                             text = getMmsPartText(partId);
                         } else {
-                            text = cursor.getString(cursor.getColumnIndex("text"));
+                            text = cursor.getString(textIndex);
                         }
-                        body.append(text);
+
+                        String existingText = textsMap.get(mid);
+                        if (existingText == null) {
+                            textsMap.put(mid, text);
+                        } else {
+                            textsMap.put(mid, existingText + text);
+                        }
                     }
                 }
             }
         } catch (Exception e) {
             e.printStackTrace();
         }
-        return body.toString();
+
+        return textsMap;
     }
 
     private String getMmsPartText(String partId) {
