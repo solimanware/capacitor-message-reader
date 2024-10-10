@@ -61,11 +61,11 @@ export interface MessageReaderPlugin {
    * Checks the current permission status for accessing messages.
    * @returns A promise that resolves with the current PermissionStatus.
    */
-  checkPermissions(): Promise<PermissionStatus>;
+  // checkPermissions(): Promise<PermissionStatus>;
 
   /**
    * Requests permissions to access messages on the device.
    * @returns A promise that resolves with the updated PermissionStatus after the request.
    */
-  requestPermissions(): Promise<PermissionStatus>;
+  // requestPermissions(): Promise<PermissionStatus>;
 }

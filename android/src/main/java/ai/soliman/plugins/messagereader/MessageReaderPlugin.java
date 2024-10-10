@@ -17,7 +17,6 @@ import org.json.JSONException;
     name = "MessageReader",
     permissions = {
         @Permission(strings = {Manifest.permission.READ_SMS}, alias = "readSms"),
-        @Permission(strings = {Manifest.permission.READ_CONTACTS}, alias = "readContacts")
     }
 )
 public class MessageReaderPlugin extends Plugin {
