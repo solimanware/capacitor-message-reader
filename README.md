@@ -37,20 +37,22 @@ Before accessing messages, check if your app has the necessary permissions, you 
 Use the `getMessages` method to retrieve messages based on various filters:
 
 ```typescript
-const getMessages = async () => {
-const filter = {
-    body: 'Hello',
-    sender: '+1234567890',
-    minDate: Date.now() - 7 24 60 60 1000, // Last 7 days
-    limit: 50
-};
+import { MessageReader } from '@solimanware/capacitor-message-reader';
 
-try {
-    const result = await MessageReader.getMessages(filter);
-    console.log('Retrieved messages:', result.messages);
-} catch (error) {
-    console.error('Error fetching messages:', error);
-}
+const getMessages = async () => {
+    const filter = {
+        body: 'Hello',
+        sender: '+1234567890',
+        minDate: Date.now() - 7 * 24 * 60 * 60 * 1000, // Last 7 days
+        limit: 50
+    };
+
+    try {
+        const result = await MessageReader.getMessages(filter);
+        console.log('Retrieved messages:', result.messages);
+    } catch (error) {
+        console.error('Error fetching messages:', error);
+    }
 };
 ```
 ## API
